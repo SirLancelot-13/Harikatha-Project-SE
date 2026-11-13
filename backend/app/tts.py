@@ -39,9 +39,9 @@ def split_text(text: str, limit: int = MAX_CHUNK_CHARS) -> list[str]:
     return chunks or [text]
 
 
-def cache_key(text: str, language: str, pace: float) -> str:
+def cache_key(text: str, language: str, pace: float, emotion: str = "devotional", emphasis: tuple[str, ...] = ()) -> str:
     parts = [text, language, f"{pace:.3f}", settings.parler_model,
-             settings.tts_speaker, str(settings.tts_sample_rate), "mock" if settings.use_mock else "live"]
+             settings.tts_speaker, emotion, ",".join(emphasis), str(settings.tts_sample_rate), "mock" if settings.use_mock else "live"]
     return hashlib.sha1("|".join(parts).encode()).hexdigest()
 
 
@@ -86,7 +86,7 @@ def _load_model():
         return _model, _tokenizer
 
 
-def _speaker_description(language: str, pace: float) -> str:
+def _speaker_description(language: str, pace: float, emotion: str = "devotional", emphasis: tuple[str, ...] = ()) -> str:
     pace_words = "slow and deliberate" if pace < 0.88 else "brisk but clear" if pace > 1.12 else "measured"
     language_name = {
         "hi-IN": "Hindi", "en-IN": "Indian English", "te-IN": "Telugu",
@@ -96,15 +96,15 @@ def _speaker_description(language: str, pace: float) -> str:
     }.get(language, "Hindi")
     return (
         f"{settings.tts_speaker} The speaker narrates in {language_name}, with {pace_words} pacing, "
-        "clear diction, expressive rises and falls, natural breaths and gentle emphasis on meaningful words."
+        "clear diction, " + emotion + " delivery, expressive rises and falls, natural breaths. "\n        + "Emphasize these words when present: " + (", ".join(emphasis) or "key names and devotional phrases") + "."
     )
 
 
-def _parler(text: str, language: str, pace: float) -> array:
+def _parler(text: str, language: str, pace: float, emotion: str, emphasis: tuple[str, ...]) -> array:
     import torch
     model, tokenizer = _load_model()
     device = next(model.parameters()).device
-    description = _speaker_description(language, pace)
+    description = _speaker_description(language, pace, emotion, emphasis)
     description_inputs = tokenizer(description, return_tensors="pt").to(device)
     prompt_inputs = tokenizer(text, return_tensors="pt").to(device)
     with torch.inference_mode():
@@ -122,22 +122,23 @@ def _parler(text: str, language: str, pace: float) -> array:
     return array("h", pcm.tolist())
 
 
-def _synth_chunk(text: str, language: str, pace: float) -> tuple[array, bool]:
-    path = settings.data_dir / "runtime" / "tts_cache" / f"{cache_key(text, language, pace)}.wav"
+def _synth_chunk(text: str, language: str, pace: float, emotion: str, emphasis: tuple[str, ...]) -> tuple[array, bool]:
+    path = settings.data_dir / "runtime" / "tts_cache" / f"{cache_key(text, language, pace, emotion, emphasis)}.wav"
     if path.exists():
         return audio.read_wav(path)[0], True
-    samples = _mock_tone(text, pace) if settings.use_mock else _parler(text, language, pace)
+    samples = _mock_tone(text, pace) if settings.use_mock else _parler(text, language, pace, emotion, emphasis)
     path.parent.mkdir(parents=True, exist_ok=True)
     audio.write_wav(path, samples, settings.tts_sample_rate)
     return samples, False
 
 
-def synthesize(text: str, language: str, pace: float = 1.0) -> tuple[array, bool]:
+def synthesize(text: str, language: str, pace: float = 1.0, emotion: str = "devotional", emphasis: list[str] | None = None) -> tuple[array, bool]:
     """Returns (PCM samples, all_chunks_cached)."""
     chunks = [text] if settings.use_mock else split_text(text)
+    emphasis_tuple = tuple((emphasis or [])[:5])
     out, all_hit = array("h"), True
     for chunk in chunks:
-        samples, hit = _synth_chunk(chunk, language, pace)
+        samples, hit = _synth_chunk(chunk, language, pace, emotion, emphasis_tuple)
         out.extend(samples)
         all_hit &= hit
     return out, all_hit
