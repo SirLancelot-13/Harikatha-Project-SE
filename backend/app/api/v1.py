@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/v1")
 
 @router.get("/health")
 def health():
-    return {"ok": True, "mock": settings.mock_sarvam}
+    return {"ok": True, "mock": settings.use_mock, "llm": "ollama", "tts": "indic-parler-tts"}
 
 
 @router.post("/performances", status_code=201)
