@@ -1,10 +1,10 @@
-"""Measured TTS speed (chars/sec), smoothed over runs. Used to turn seconds into characters."""
+"""Measured TTS speed (chars/sec), smoothed over runs."""
 import json
 
 from .config import settings
 
-FALLBACK_CPS = 13.2
-_SMOOTHING = 0.3  # weight of the newest measurement
+FALLBACK_CPS = 10.5
+_SMOOTHING = 0.3
 
 
 def _path():
@@ -12,7 +12,7 @@ def _path():
 
 
 def _key(language: str) -> str:
-    return f"{language}|{settings.tts_speaker}|{settings.tts_model}|{'mock' if settings.mock_sarvam else 'live'}"
+    return f"{language}|{settings.tts_speaker}|{settings.parler_model}|{'mock' if settings.use_mock else 'live'}"
 
 
 def _load() -> dict:
