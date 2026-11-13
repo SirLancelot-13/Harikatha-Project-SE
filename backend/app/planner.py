@@ -3,7 +3,7 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import calibration, languages, llm, sarvam, store
+from . import calibration, languages, llm, store
 from .config import settings
 from .schemas import (
     Critique,
@@ -169,7 +169,47 @@ def assemble(b: SectionBudget, out: SectionOutput, corpus: dict[str, dict]) -> l
             source_ids=[text_out.source_id] if record else [],
             target_sec=slot.target_sec,
         ))
+    # Attach a stable scene key and emotional direction to each narration unit.
+    for segment in segments:
+        segment.scene = f"{b.section}-{segment.id.split('.')[-1]}"
+        segment.delivery.emotion = _emotion_for(segment, b.kind)
+        segment.delivery.emphasis_words = _emphasis_for(segment.text)
     return segments
+
+
+def _emotion_for(segment: Segment, section_kind: str) -> str:
+    if section_kind == "invocation":
+        return "reverent, soft and prayerful"
+    if section_kind == "mangalam":
+        return "serene, grateful and peaceful"
+    if segment.type == "song":
+        return "devotional, melodic and warmly expressive"
+    text = segment.text.lower()
+    cues = {
+        "wonder": ("miracle", "प्रकट", "दर्शन", "चमत्कार", "अद्भुत", "विस्मय"),
+        "sorrow": ("वियोग", "विलाप", "आँसू", "दुःख", "करुणा", "रोने"),
+        "courage": ("युद्ध", "रणभूमि", "वीर", "पराक्रम", "धर्मयुद्ध", "battle"),
+        "joy": ("आनंद", "हर्ष", "उत्सव", "प्रसन्न", "विजय", "जय"),
+        "wisdom": ("उपदेश", "ज्ञान", "धर्म", "सत्य", "तत्त्व", "नीति"),
+    }
+    for emotion, words in cues.items():
+        if any(word in text for word in words):
+            return {
+                "wonder": "awe-filled, spacious and gently rising",
+                "sorrow": "tender, compassionate and unhurried",
+                "courage": "bold, energetic and resonant",
+                "joy": "bright, joyful and uplifting",
+                "wisdom": "calm, clear and contemplative",
+            }[emotion]
+    return "warm, conversational and devotional"
+
+
+def _emphasis_for(text: str) -> list[str]:
+    import re
+    words = re.findall(r"[\\w\\u0900-\\u097f]+", text)
+    stop = {"और", "तथा", "लेकिन", "क्योंकि", "फिर", "उसके", "उनके", "एक", "यह", "वह", "के", "की", "का"}
+    candidates = [w for w in words if len(w) >= 3 and w.lower() not in stop]
+    return list(dict.fromkeys(candidates[:5]))
 
 
 # --- stage 5 -------------------------------------------------------------
@@ -302,7 +342,7 @@ def run_script_job(pid: str) -> None:
         store.write_status(pid, "writing", "critique", progress=0.85)
         try:
             verdict = critique(pid, script, analysis)
-        except (llm.LLMError, sarvam.SarvamError) as e:  # a quality pass must not lose the script
+        except llm.LLMError as e:  # a quality pass must not lose the script
             verdict, skipped = Critique(ok=True), f"{type(e).__name__}: {e}"
         else:
             skipped = None
