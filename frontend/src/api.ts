@@ -16,11 +16,13 @@ export type Segment = {
   origin: "original" | "traditional";
   source_ids: string[];
   target_sec: number;
+  delivery?: { emotion?: string; emphasis_words?: string[]; pace?: number };
+  scene?: string | null;
 };
 
 export type Script = { title: string; language: string; target_sec: number; segments: Segment[] };
 
-export type TimelineSegment = { id: string; start: number; end: number; overrun: number };
+export type TimelineSegment = { id: string; start: number; end: number; overrun: number; section?: string; type?: string; scene?: string | null; emotion?: string };
 export type Timeline = { total_sec: number; script_version: number; segments: TimelineSegment[] };
 
 export type Credit = {
