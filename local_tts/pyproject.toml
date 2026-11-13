@@ -1,0 +1,31 @@
+[project]
+name = "harikatha-local-tts"
+version = "0.1.0"
+description = "Local open-source TTS server (Indic Parler-TTS) for the Harikatha backend"
+# Separate from the backend on purpose: parler-tts pins transformers==4.46.1 and the CUDA build of
+# torch, which must not be installed next to the backend's dependencies.
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "numpy",
+  "torch",
+  "torchaudio",
+  "parler_tts @ git+https://github.com/huggingface/parler-tts.git",
+  # 0.2.0: later releases were generated for protobuf>=5.26, but audiotools holds protobuf at 4.x
+  "sentencepiece==0.2.0",
+  "protobuf>=4.0.0",
+]
+
+[tool.uv]
+package = false
+
+# RTX 50-series (Blackwell) GPUs need the CUDA 12.8 build of torch.
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

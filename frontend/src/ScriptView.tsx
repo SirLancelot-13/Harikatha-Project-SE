@@ -13,10 +13,11 @@ function SegmentRow({
   seg: Segment;
   active: boolean;
   editable: boolean;
-  onSave: (id: string, text: string) => Promise<void>;
+  onSave: (id: string, edit: { text?: string; pitch_lift_st?: number }) => Promise<void>;
 }) {
   const [text, setText] = useState(seg.text);
-  const dirty = text !== seg.text;
+  const [lift, setLift] = useState(seg.delivery.pitch_lift_st);
+  const dirty = text !== seg.text || lift !== seg.delivery.pitch_lift_st;
 
   return (
     <div className={`segment${active ? " active" : ""}`}>
@@ -27,8 +28,29 @@ function SegmentRow({
         {seg.source_ids.length > 0 && <span>source: {seg.source_ids.join(", ")}</span>}
       </div>
       <textarea value={text} rows={2} disabled={!editable} onChange={(e) => setText(e.target.value)} />
+      <label className="lift">
+        Pitch lift (semitones, 0-3){" "}
+        <input
+          type="number"
+          min={0}
+          max={3}
+          step={0.5}
+          value={lift}
+          disabled={!editable}
+          onChange={(e) => setLift(Math.min(3, Math.max(0, +e.target.value || 0)))}
+        />
+      </label>
       {dirty && editable && (
-        <button onClick={() => onSave(seg.id, text)}>Save edit</button>
+        <button
+          onClick={() =>
+            onSave(seg.id, {
+              text: text !== seg.text ? text : undefined,
+              pitch_lift_st: lift !== seg.delivery.pitch_lift_st ? lift : undefined,
+            })
+          }
+        >
+          Save edit
+        </button>
       )}
     </div>
   );
@@ -43,7 +65,7 @@ export default function ScriptView({
   segments: Segment[];
   activeId: string | null;
   editable: boolean;
-  onSave: (id: string, text: string) => Promise<void>;
+  onSave: (id: string, edit: { text?: string; pitch_lift_st?: number }) => Promise<void>;
 }) {
   const sections = [...new Set(segments.map((s) => s.section))];
   return (
@@ -55,7 +77,7 @@ export default function ScriptView({
             .filter((s) => s.section === sec)
             // key includes text so a saved or regenerated segment resets its draft
             .map((s) => (
-              <SegmentRow key={`${s.id}:${s.text}`} seg={s} active={s.id === activeId} editable={editable} onSave={onSave} />
+              <SegmentRow key={`${s.id}:${s.text}:${s.delivery.pitch_lift_st}`} seg={s} active={s.id === activeId} editable={editable} onSave={onSave} />
             ))}
         </section>
       ))}

@@ -43,6 +43,7 @@ class SectionBudget(BaseModel):
 class Delivery(BaseModel):
     pace: float = 1.0
     gain_db: float = 0.0
+    pitch_lift_st: float = Field(default=0.0, ge=0.0, le=3.0)  # gentle emphasis lift, semitones
     melodic: bool = False
     raga: str | None = None
     tala: str | None = None

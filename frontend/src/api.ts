@@ -6,6 +6,7 @@ export type Status = {
   updated_at: string;
   files?: string[];
   total_sec?: number;
+  tts_backend?: string;
 };
 
 export type Segment = {
@@ -16,6 +17,7 @@ export type Segment = {
   origin: "original" | "traditional";
   source_ids: string[];
   target_sec: number;
+  delivery: { pitch_lift_st: number };
 };
 
 export type Script = { title: string; language: string; target_sec: number; segments: Segment[] };
@@ -77,8 +79,11 @@ export const getHealth = () => fetch(`${BASE}/health`).then((r) => json<{ ok: bo
 
 export const render = (id: string) => send("POST", `/performances/${id}/render`).then((r) => json<Status>(r));
 
-export const editSegment = (id: string, sid: string, text: string) =>
-  send("PATCH", `/performances/${id}/segments/${sid}`, { text }).then((r) =>
+export const editSegment = (id: string, sid: string, edit: { text?: string; pitch_lift_st?: number }) =>
+  send("PATCH", `/performances/${id}/segments/${sid}`, {
+    text: edit.text,
+    delivery: edit.pitch_lift_st === undefined ? undefined : { pitch_lift_st: edit.pitch_lift_st },
+  }).then((r) =>
     json<{ script_version: number; segment: Segment }>(r),
   );
 

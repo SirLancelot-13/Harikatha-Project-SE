@@ -80,6 +80,7 @@ export default function App() {
             <b>{perf.request.title}</b> · {perf.status.stage}
             {perf.status.detail && ` (${perf.status.detail})`}
             {perf.status.script_version && ` · script v${perf.status.script_version}`}
+            {perf.status.tts_backend && perf.status.tts_backend !== "mock" && ` · voice: ${perf.status.tts_backend}`}
             {perf.status.progress !== null && RUNNING.has(perf.status.stage) && (
               <progress value={perf.status.progress} max={1} />
             )}
@@ -113,7 +114,7 @@ export default function App() {
               segments={perf.script.segments}
               activeId={activeId}
               editable={!running}
-              onSave={(sid, text) => editSegment(perf.id, sid, text).then(() => refresh(perf.id)).catch(fail)}
+              onSave={(sid, edit) => editSegment(perf.id, sid, edit).then(() => refresh(perf.id)).catch(fail)}
             />
           )}
         </>

@@ -18,3 +18,5 @@ progress { width: 100%; display: block; margin-top: 6px; }
 audio { width: 100%; }
 .credits { font-size: 0.8rem; opacity: 0.8; }
 .warn { background: #e8a31733; border: 1px solid #e8a317; border-radius: 6px; padding: 6px 10px; }
+.lift { display: block; font-size: 0.8rem; opacity: 0.85; margin: 4px 0; }
+.lift input { width: 4rem; }

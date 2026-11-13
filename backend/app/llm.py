@@ -1,6 +1,10 @@
 """LLM wrapper: validates output against a pydantic model, retries once with the
 validation error as feedback, and logs every attempt.
 
+Providers: "sarvam" (hosted API), "local" (any OpenAI-compatible server you run, via
+LOCAL_LLM_URL) and, for LLM_PROVIDER=auto, local first then Sarvam. Falling back to Sarvam
+when the local model is unreachable OR keeps producing output that fails validation makes
+the validators a quality gate for the local model.
 MOCK_SARVAM=true uses the caller's mock_fn instead of the network.
 """
 import hashlib
@@ -13,7 +17,7 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, ValidationError
 
-from . import sarvam
+from . import local, sarvam
 from .config import settings
 
 MAX_ATTEMPTS = 2
@@ -48,37 +52,63 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-def _chat(messages: list[dict], reasoning_effort: str) -> tuple[str, dict]:
-    data = sarvam.post("/v1/chat/completions", {
-        "model": settings.llm_model,
-        "messages": messages,
-        "temperature": settings.llm_temperature,
-        "max_tokens": settings.llm_max_tokens,
-        # The API accepts only low/medium/high (despite its docs); null disables reasoning.
-        "reasoning_effort": None if reasoning_effort == "none" else reasoning_effort,
-        "response_format": {"type": "json_object"},
-    })
-    choice = data["choices"][0]
-    content = choice["message"].get("content") or ""
+def providers() -> list[str]:
+    """Providers to try, in order."""
+    if settings.mock_sarvam:
+        return ["mock"]
+    if settings.llm_provider == "sarvam":
+        return ["sarvam"]
+    if settings.llm_provider == "local":
+        return ["local"]
+    return (["local"] if settings.local_llm_url else []) + ["sarvam"]  # auto
+
+
+def _model_name(provider: str) -> str:
+    return {"mock": "mock", "local": settings.local_llm_model}.get(provider, settings.llm_model)
+
+
+def _chat(provider: str, messages: list[dict], reasoning_effort: str) -> tuple[str, dict]:
+    if provider == "local":
+        if not settings.local_llm_model:
+            raise local.LocalError("LOCAL_LLM_MODEL is not set")
+        data = local.chat({
+            "model": settings.local_llm_model,
+            "messages": messages,
+            "temperature": settings.llm_temperature,
+            "max_tokens": settings.llm_max_tokens,
+            "response_format": {"type": "json_object"},
+        })
+    else:
+        data = sarvam.post("/v1/chat/completions", {
+            "model": settings.llm_model,
+            "messages": messages,
+            "temperature": settings.llm_temperature,
+            "max_tokens": settings.llm_max_tokens,
+            # The API accepts only low/medium/high (despite its docs); null disables reasoning.
+            "reasoning_effort": None if reasoning_effort == "none" else reasoning_effort,
+            "response_format": {"type": "json_object"},
+        })
+    try:
+        choice = data["choices"][0]
+        content = choice["message"].get("content") or ""
+    except (KeyError, IndexError, TypeError, AttributeError) as e:
+        raise LLMError(f"unexpected response shape from {provider}") from e
     if not content and choice.get("finish_reason") == "length":
         raise LLMError("response truncated by max_tokens (reasoning used the whole budget)")
     return content, data.get("usage") or {}
 
 
-def complete_json[T: BaseModel](
-    *, pid: str, stage: str, prompt: str, model: type[T], mock_fn: Callable[[], T],
-    system: str = "", check: Callable[[T], None] | None = None, reasoning_effort: str | None = None,
+def _run[T: BaseModel](
+    provider: str, *, pid: str, stage: str, prompt: str, model: type[T], mock_fn: Callable[[], T],
+    system: str, check: Callable[[T], None] | None, reasoning_effort: str | None,
 ) -> T:
-    """check() may raise ValueError to reject bad output (triggers the retry). Raising SoftCheck
-    instead means the final attempt is accepted anyway, for problems a later stage can fix."""
-    mock = settings.mock_sarvam
+    mock = provider == "mock"
     schema = json.dumps(model.model_json_schema())
     messages = [
         {"role": "system", "content": f"{system}\n\nRespond with ONE JSON object and nothing else, "
                                       f"matching this JSON Schema:\n{schema}".strip()},
         {"role": "user", "content": prompt},
     ]
-    _calls[pid] += 1
     last_error = ""
     for attempt in range(MAX_ATTEMPTS):
         start = time.monotonic()
@@ -88,7 +118,7 @@ def complete_json[T: BaseModel](
                 result = model.model_validate(mock_fn())
                 response = result.model_dump(mode="json")
             else:
-                response, usage = _chat(messages, reasoning_effort or settings.reasoning_effort)
+                response, usage = _chat(provider, messages, reasoning_effort or settings.reasoning_effort)
                 result = model.model_validate(_extract_json(response))
             if check:
                 check(result)
@@ -109,7 +139,8 @@ def complete_json[T: BaseModel](
                 "at": datetime.now(UTC).isoformat(timespec="seconds"),
                 "performance_id": pid,
                 "stage": stage,
-                "model": "mock" if mock else settings.llm_model,
+                "provider": provider,
+                "model": _model_name(provider),
                 "temperature": settings.llm_temperature,
                 "prompt_sha1": hashlib.sha1(prompt.encode()).hexdigest(),
                 "prompt": prompt[:4000],
@@ -120,3 +151,31 @@ def complete_json[T: BaseModel](
                 "retry": attempt,
             })
     raise LLMError(f"{stage}: invalid output after {MAX_ATTEMPTS} attempts: {last_error}")
+
+
+def complete_json[T: BaseModel](
+    *, pid: str, stage: str, prompt: str, model: type[T], mock_fn: Callable[[], T],
+    system: str = "", check: Callable[[T], None] | None = None, reasoning_effort: str | None = None,
+) -> T:
+    """check() may raise ValueError to reject bad output (triggers the retry). Raising SoftCheck
+    instead means the final attempt is accepted anyway, for problems a later stage can fix.
+
+    With several providers (LLM_PROVIDER=auto) a failure of one - unreachable, an HTTP error or
+    output that never validates - moves on to the next; only the last provider's failure is raised."""
+    _calls[pid] += 1
+    order = providers()
+    for i, provider in enumerate(order):
+        try:
+            return _run(
+                provider, pid=pid, stage=stage, prompt=prompt, model=model, mock_fn=mock_fn,
+                system=system, check=check, reasoning_effort=reasoning_effort,
+            )
+        except (LLMError, local.LocalError, sarvam.SarvamError) as e:
+            if i == len(order) - 1:
+                raise
+            _log({
+                "at": datetime.now(UTC).isoformat(timespec="seconds"), "performance_id": pid,
+                "stage": stage, "provider": provider, "fallback_to": order[i + 1],
+                "reason": f"{type(e).__name__}: {str(e)[:300]}",
+            })
+    raise AssertionError("unreachable")

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings
 
@@ -20,7 +21,21 @@ class Settings(BaseSettings):
     tts_speaker: str = "shubh"
     tts_sample_rate: int = 24000
     overrun_threshold: float = 0.2
+    pitch_modulation: bool = True  # PITCH_MODULATION=false turns the shloka lift off
+    shloka_lift_st: float = 1.5  # default gentle lift for shlokas (hard cap is 3.0)
     mix_disable: str = ""  # comma list of layers to leave out: drone,scene,pulse,bells
+
+    # Open-source models run locally; Sarvam stays the default and the fallback.
+    #   sarvam = Sarvam only | local = local only (fail if it is down) | auto = local first, else Sarvam
+    tts_provider: Literal["sarvam", "local", "auto"] = "sarvam"
+    llm_provider: Literal["sarvam", "local", "auto"] = "sarvam"
+    local_tts_url: str = "http://127.0.0.1:8100"
+    local_tts_timeout_sec: float = 180.0
+    local_llm_url: str = ""  # OpenAI-compatible base URL incl. /v1, e.g. http://127.0.0.1:11434/v1
+    local_llm_model: str = ""
+    local_llm_api_key: str = ""  # only if your local server wants one; never the Sarvam key
+    local_llm_timeout_sec: float = 300.0
+    local_connect_timeout_sec: float = 3.0  # a dead local server must fail fast, then we fall back
 
     request_timeout_sec: float = 120.0
     max_retries: int = 3
@@ -42,6 +57,8 @@ class Settings(BaseSettings):
             "tts_sample_rate": self.tts_sample_rate,
             "overrun_threshold": self.overrun_threshold,
             "mock": self.mock_sarvam,
+            "tts_provider": self.tts_provider,
+            "llm_provider": self.llm_provider,
         }
 
 

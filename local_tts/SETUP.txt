@@ -1,0 +1,61 @@
+LOCAL TTS SERVER (open-source voice for the Harikatha backend)
+===============================================================
+
+What this is
+------------
+A small separate service that runs ai4bharat/indic-parler-tts on your own GPU and speaks a simple
+HTTP contract (GET /health, POST /synthesize). The backend calls it when TTS_PROVIDER=auto or
+local, and falls back to Sarvam's Bulbul if it is down or fails (auto only).
+
+It lives in its own environment (local_tts/.venv) on purpose: Parler-TTS pins
+transformers==4.46.1 and a CUDA build of torch, which must not be mixed into the backend.
+It listens on 127.0.0.1 only, so nothing outside your machine can reach it.
+
+The model
+---------
+ai4bharat/indic-parler-tts: Apache-2.0, 0.9B parameters, 21 languages, controllable pace /
+pitch / expressiveness through a text description, named speakers. It is GATED on Hugging Face:
+you must accept its conditions once with your own account. Native-speaker scores on the model
+card: Hindi 84.8%, Telugu 88.5%, Tamil 75.5%. There is no head-to-head benchmark against
+Bulbul, so judge expressiveness by listening (step 6).
+
+STATUS (2026-11-14): steps 1-5 were completed on this machine and the model ran. What is left is
+listening (step 6). Commands: local-tts-install (once), local-tts-check (GPU), local-tts (run).
+
+Steps (you do these; none of them needs me)
+-------------------------------------------
+1. Hugging Face account: sign up / log in at https://huggingface.co
+2. Accept the gate: open https://huggingface.co/ai4bharat/indic-parler-tts and click the
+   button to accept the conditions.
+3. Create a READ token at https://huggingface.co/settings/tokens and put it in .env at the repo
+   root as HF_TOKEN=<token>. Do not paste it anywhere else.
+4. Install the server's environment (downloads several GB: CUDA torch + Parler-TTS; needs git
+   and internet; takes a while). From the repo root:
+       devenv shell
+       local-tts-install
+   Check the GPU is seen (RTX 50-series needs the cu128 torch build, already configured):
+       local-tts-check
+   Expect: True. If False, send me the output.
+5. Start the server (first start downloads the model, ~4 GB, then loads it onto the GPU):
+       local-tts
+   Wait for "ready: native sample rate ...", then in another terminal:
+       curl http://127.0.0.1:8100/health
+   To test the wiring without the model or a GPU first: LOCAL_TTS_ENGINE=stub local-tts
+6. Turn it on: in .env set  TTS_PROVIDER=auto  and restart `devenv up`.
+   Render something. The status card shows which voice made it (local or sarvam). To compare,
+   render the same story with TTS_PROVIDER=sarvam and listen to both.
+
+If it fails
+-----------
+- Backend log / status shows a fallback reason: meta.json "tts_fallback" in the performance
+  folder says why Sarvam was used.
+- Out of memory: close other GPU programs; the model needs about 2-4 GB of the 8 GB.
+- Wrong speaker or language: set LOCAL_TTS_SPEAKER (e.g. Divya) for every language, or edit
+  DEFAULT_SPEAKERS in tts_server.py. Language is detected from the text script.
+- Punjabi is not served locally (the model card calls it unofficial); the backend uses Sarvam.
+
+Swapping in another model later
+-------------------------------
+Only tts_server.py knows about Parler. Another engine needs to implement load() and
+synthesize(text, language, pace, kind, speaker) -> float32 audio at 24 kHz, and be selectable via
+LOCAL_TTS_ENGINE. The backend does not change.

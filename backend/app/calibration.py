@@ -11,24 +11,27 @@ def _path():
     return settings.data_dir / "runtime" / "calibration.json"
 
 
-def _key(language: str) -> str:
-    return f"{language}|{settings.tts_speaker}|{settings.tts_model}|{'mock' if settings.mock_sarvam else 'live'}"
+def _key(language: str, voice: str | None) -> str:
+    voice = voice or f"{settings.tts_model}/{settings.tts_speaker}"  # default: the Sarvam voice
+    return f"{language}|{voice}|{'mock' if settings.mock_sarvam else 'live'}"
 
 
 def _load() -> dict:
     return json.loads(_path().read_text()) if _path().exists() else {}
 
 
-def get(language: str) -> float:
-    return _load().get(_key(language), FALLBACK_CPS)
+def get(language: str, voice: str | None = None) -> float:
+    return _load().get(_key(language, voice), FALLBACK_CPS)
 
 
-def update(language: str, chars: int, seconds: float) -> None:
+def update(language: str, chars: int, seconds: float, voice: str | None = None) -> None:
     if chars < 50 or seconds <= 0:
         return
     data = _load()
     measured = chars / seconds
-    old = data.get(_key(language))
-    data[_key(language)] = round(measured if old is None else old * (1 - _SMOOTHING) + measured * _SMOOTHING, 3)
+    old = data.get(_key(language, voice))
+    data[_key(language, voice)] = round(
+        measured if old is None else old * (1 - _SMOOTHING) + measured * _SMOOTHING, 3
+    )
     _path().parent.mkdir(parents=True, exist_ok=True)
     _path().write_text(json.dumps(data, indent=2))

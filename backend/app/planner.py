@@ -3,10 +3,11 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from . import calibration, languages, llm, sarvam, store
+from . import calibration, languages, llm, sarvam, store, tts
 from .config import settings
 from .schemas import (
     Critique,
+    Delivery,
     GenerateRequest,
     RewriteOutput,
     Script,
@@ -168,6 +169,7 @@ def assemble(b: SectionBudget, out: SectionOutput, corpus: dict[str, dict]) -> l
             origin="traditional" if record else "original",
             source_ids=[text_out.source_id] if record else [],
             target_sec=slot.target_sec,
+            delivery=Delivery(pitch_lift_st=min(3.0, settings.shloka_lift_st) if slot.type == "shloka" else 0.0),
         ))
     return segments
 
@@ -272,7 +274,7 @@ def run_script_job(pid: str) -> None:
         lap("analyse")
 
         store.write_status(pid, "planning", progress=0.3)
-        cps = calibration.get(req.language)
+        cps = calibration.get(req.language, tts.planned_voice(req.language))
         budgets = budget(req, analysis, cps)
         store.write_stage(pid, "02_budget.json", {
             "chars_per_sec": cps, "sections": [b.model_dump() for b in budgets],

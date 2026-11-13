@@ -2,8 +2,9 @@ from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 
-from .. import planner, store
+from .. import local, planner, store
 from .. import render as renderer
 from ..config import settings
 from ..schemas import Delivery, GenerateRequest, Rating, SegmentEdit
@@ -15,7 +16,11 @@ router = APIRouter(prefix="/api/v1")
 
 @router.get("/health")
 def health():
-    return {"ok": True, "mock": settings.mock_sarvam}
+    return {
+        "ok": True, "mock": settings.mock_sarvam,
+        "tts_provider": settings.tts_provider, "llm_provider": settings.llm_provider,
+        "local_tts": (local.health() is not None) if settings.tts_provider != "sarvam" else None,
+    }
 
 
 @router.post("/performances", status_code=201)
@@ -80,7 +85,10 @@ def edit_segment(pid: str, sid: str, edit: SegmentEdit):
     if edit.text is not None:
         seg["text"] = edit.text
     if edit.delivery is not None:
-        seg["delivery"] = Delivery.model_validate({**seg["delivery"], **edit.delivery}).model_dump(mode="json")
+        try:
+            seg["delivery"] = Delivery.model_validate({**seg["delivery"], **edit.delivery}).model_dump(mode="json")
+        except ValidationError as e:
+            raise HTTPException(422, e.errors(include_url=False, include_context=False)) from e
     v = store.save_script(pid, script, f"user edit: {sid}")
     store.write_status(pid, status["stage"], status["detail"], status["progress"])
     return {"script_version": v, "segment": seg}

@@ -1,7 +1,8 @@
 """TTS with a global content-addressed cache (one entry per sentence chunk).
 
-Mock mode generates a quiet 200 Hz tone whose length is len(text) / MOCK_CHARS_PER_SEC.
-Live mode calls Bulbul (POST /text-to-speech) and caches the returned WAV.
+Backends: "sarvam" (Bulbul), "local" (self-hosted open-source model, see local_tts/), and
+"mock" (a quiet tone, no network). One performance always uses ONE backend so the voice
+never changes mid-story; see pick_backend() and render.py for how fallback is decided.
 """
 import base64
 import hashlib
@@ -9,7 +10,7 @@ import re
 import wave
 from array import array
 
-from . import audio, sarvam
+from . import audio, local, sarvam
 from .config import settings
 
 MOCK_CHARS_PER_SEC = 12.0
@@ -35,9 +36,47 @@ def split_text(text: str, limit: int = MAX_CHUNK_CHARS) -> list[str]:
     return chunks or [text]
 
 
-def cache_key(text: str, language: str, pace: float) -> str:
-    parts = [text, language, f"{pace:.3f}", settings.tts_model, settings.tts_speaker,
-             str(settings.tts_sample_rate), "mock" if settings.mock_sarvam else "live"]
+# --- choosing a backend --------------------------------------------------------
+
+def voice_id(backend: str) -> str:
+    """Names the voice for cache keys and calibration, so different voices never share entries."""
+    if backend == "local":
+        return f"local/{(local.health() or {}).get('engine', 'unknown')}"
+    return f"{settings.tts_model}/{settings.tts_speaker}"
+
+
+def pick_backend(language: str) -> tuple[str, str | None]:
+    """(backend, why_not_local). Decided once per render so the whole story has one voice."""
+    if settings.mock_sarvam:
+        return "mock", None
+    if settings.tts_provider == "sarvam":
+        return "sarvam", None
+    info = local.health()
+    if info is not None and language in info["languages"]:
+        return "local", None
+    reason = "local TTS server is not reachable" if info is None else f"local TTS does not support {language}"
+    if settings.tts_provider == "local":
+        raise local.LocalError(reason)
+    return "sarvam", reason
+
+
+def planned_voice(language: str) -> str:
+    """Voice used to size the script before rendering. Never raises."""
+    try:
+        backend, _ = pick_backend(language)
+    except local.LocalError:
+        backend = "sarvam"
+    return voice_id("local" if backend == "local" else "sarvam")
+
+
+# --- synthesis -------------------------------------------------------------------
+
+def cache_key(text: str, language: str, pace: float, backend: str = "sarvam", kind: str = "") -> str:
+    parts = [text, language, f"{pace:.3f}", backend, str(settings.tts_sample_rate)]
+    if backend == "local":
+        parts += [voice_id("local"), kind]
+    elif backend == "sarvam":
+        parts += [settings.tts_model, settings.tts_speaker]
     return hashlib.sha1("|".join(parts).encode()).hexdigest()
 
 
@@ -69,36 +108,49 @@ def _bulbul(text: str, language: str, pace: float) -> bytes:
     return base64.b64decode("".join(data["audios"]))
 
 
-def _synth_chunk(text: str, language: str, pace: float) -> tuple[array, bool]:
-    path = settings.data_dir / "runtime" / "tts_cache" / f"{cache_key(text, language, pace)}.wav"
-    if path.exists():
-        return audio.read_wav(path)[0], True
-    if settings.mock_sarvam:
-        samples = _mock_tone(text, pace)
-        audio.write_wav(path, samples, settings.tts_sample_rate)
-        return samples, False
-    wav_bytes = _bulbul(text, language, pace)
+def _store_wav(path, wav_bytes: bytes, error: type[Exception]) -> array:
+    """Validate downloaded audio, then publish it atomically into the cache."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f".{id(wav_bytes)}.tmp")  # atomic: concurrent renders share the cache
     tmp.write_bytes(wav_bytes)
     try:
         samples, rate = audio.read_wav(tmp)
-    except wave.Error as e:
+    except (wave.Error, EOFError) as e:
         tmp.unlink(missing_ok=True)
-        raise sarvam.SarvamError(f"unexpected WAV from Bulbul: {e}") from e
+        raise error(f"unexpected WAV: {e}") from e
     if rate != settings.tts_sample_rate:
         tmp.unlink(missing_ok=True)
-        raise sarvam.SarvamError(f"Bulbul returned {rate} Hz, expected {settings.tts_sample_rate}")
+        raise error(f"returned {rate} Hz, expected {settings.tts_sample_rate}")
+    if len(samples) == 0:
+        tmp.unlink(missing_ok=True)
+        raise error("returned empty audio")
     tmp.replace(path)
-    return samples, False
+    return samples
 
 
-def synthesize(text: str, language: str, pace: float = 1.0) -> tuple[array, bool]:
-    """Returns (samples, all_chunks_cached)."""
-    chunks = [text] if settings.mock_sarvam else split_text(text)
+def _synth_chunk(text: str, language: str, pace: float, kind: str, backend: str) -> tuple[array, bool]:
+    key = cache_key(text, language, pace, backend, kind)
+    path = settings.data_dir / "runtime" / "tts_cache" / f"{key}.wav"
+    if path.exists():
+        return audio.read_wav(path)[0], True
+    if backend == "mock":
+        samples = _mock_tone(text, pace)
+        audio.write_wav(path, samples, settings.tts_sample_rate)
+        return samples, False
+    if backend == "local":
+        return _store_wav(path, local.synthesize(text, language, pace, kind), local.LocalError), False
+    return _store_wav(path, _bulbul(text, language, pace), sarvam.SarvamError), False
+
+
+def synthesize(
+    text: str, language: str, pace: float = 1.0, kind: str = "narration", backend: str | None = None
+) -> tuple[array, bool]:
+    """Returns (samples, all_chunks_cached). Mock mode always wins: it never uses the network."""
+    backend = "mock" if settings.mock_sarvam else (backend or "sarvam")
+    chunks = [text] if backend == "mock" else split_text(text)
     out, all_hit = array("h"), True
     for chunk in chunks:
-        samples, hit = _synth_chunk(chunk, language, pace)
+        samples, hit = _synth_chunk(chunk, language, pace, kind, backend)
         out.extend(samples)
         all_hit &= hit
     return out, all_hit

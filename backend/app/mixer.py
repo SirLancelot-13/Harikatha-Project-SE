@@ -148,7 +148,10 @@ def _credit(bed: sounds.Bed) -> dict | None:
             "requires_attribution": bool(m.get("requires_attribution"))}
 
 
-def build(script: dict, clips: dict[str, np.ndarray], rate: int) -> Mix:
+def build(script: dict, clips: dict[str, np.ndarray], rate: int,
+          pitch_ref: dict[str, np.ndarray] | None = None) -> Mix:
+    """`pitch_ref`: unmodulated clips used to measure the voice's tonic, so an emphasis lift on
+    some segments does not move the drone."""
     off = {x.strip() for x in settings.mix_disable.split(",") if x.strip()}  # MIX_DISABLE, for tuning by ear
     segs = script["segments"]
     trimmed = {s["id"]: trim_silence(clips[s["id"]], rate) for s in segs}
@@ -169,7 +172,8 @@ def build(script: dict, clips: dict[str, np.ndarray], rate: int) -> Mix:
     voice_rms = rms(np.concatenate([trimmed[s["id"]] for s in segs])) or 1e-3
 
     # 2. drone: pick the recording needing the smallest shift to the voice's tonic
-    f0 = estimate_f0(np.concatenate([trimmed[s["id"]] for s in segs]), rate)
+    ref = {s["id"]: trim_silence((pitch_ref or clips)[s["id"]], rate) for s in segs}
+    f0 = estimate_f0(np.concatenate([ref[s["id"]] for s in segs]), rate)
     drones = sounds.tanpuras(rate)
     if f0:
         shifts = [semitone_shift(d.sa_hz, f0) for d in drones]

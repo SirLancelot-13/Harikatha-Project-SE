@@ -49,6 +49,13 @@
   scripts.lint.exec = "cd $DEVENV_ROOT/backend && ruff check .";
   scripts.test-backend.exec = "cd $DEVENV_ROOT/backend && pytest";
   scripts.build-frontend.exec = "cd $DEVENV_ROOT/frontend && npm ci && npm run build";
+  # Local open-source TTS server (separate environment, see local_tts/SETUP.txt). Not part of `devenv up`.
+  # It must NOT use devenv's UV_PROJECT_ENVIRONMENT (that is the backend venv), hence the override.
+  # On NixOS the NVIDIA driver lib is in /run/opengl-driver/lib; torch cannot find the GPU without it.
+  # It needs Python 3.12 (parler-tts does not support 3.14), so the install may download that interpreter.
+  scripts.local-tts-install.exec = "cd $DEVENV_ROOT/local_tts && env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=.venv UV_PYTHON_DOWNLOADS=automatic UV_PYTHON_PREFERENCE=managed uv sync --python 3.12";
+  scripts.local-tts.exec = "cd $DEVENV_ROOT/local_tts && env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=.venv LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH UV_PYTHON_PREFERENCE=managed uv run --no-sync python tts_server.py";
+  scripts.local-tts-check.exec = "cd $DEVENV_ROOT/local_tts && env -u VIRTUAL_ENV UV_PROJECT_ENVIRONMENT=.venv LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH UV_PYTHON_PREFERENCE=managed uv run --no-sync python check_gpu.py";
 
   # https://devenv.sh/basics/
   enterShell = ''
