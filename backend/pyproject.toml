@@ -11,7 +11,7 @@ dependencies = [
   "numpy>=2.5.4",
 ]
 
-[dependency-groups]
+[project.optional-dependencies]\ntts = [\n  "torch>=2.2",\n  "transformers>=4.46",\n  "parler-tts>=0.2.2",\n  "accelerate>=0.34",\n  "sentencepiece>=0.2",\n]\n\n[dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.uv]
