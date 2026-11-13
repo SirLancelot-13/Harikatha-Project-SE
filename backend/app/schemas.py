@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 LanguageCode = Literal[
     "bn-IN", "en-IN", "gu-IN", "hi-IN", "kn-IN", "ml-IN", "mr-IN", "od-IN", "pa-IN", "ta-IN", "te-IN"
-]  # Bulbul's supported codes
+]
 
 
 class GenerateRequest(BaseModel):
@@ -14,8 +14,6 @@ class GenerateRequest(BaseModel):
     duration_minutes: int = Field(default=8, ge=1, le=60)
     audience: str = "general"
 
-
-# --- pipeline artifacts -------------------------------------------------
 
 class StoryAnalysis(BaseModel):
     characters: list[str]
@@ -43,6 +41,8 @@ class SectionBudget(BaseModel):
 class Delivery(BaseModel):
     pace: float = 1.0
     gain_db: float = 0.0
+    emotion: str = "devotional"
+    emphasis_words: list[str] = []
     melodic: bool = False
     raga: str | None = None
     tala: str | None = None
@@ -73,12 +73,10 @@ class Script(BaseModel):
 
 class SlotText(BaseModel):
     text: str = ""
-    source_id: str | None = None  # corpus record to use verbatim instead of `text`
+    source_id: str | None = None
 
 
 class SectionOutput(BaseModel):
-    """Raw LLM output for one section, before assembly into Segments."""
-
     slots: list[SlotText]
 
 
