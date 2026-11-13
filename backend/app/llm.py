@@ -1,8 +1,4 @@
-"""LLM wrapper: validates output against a pydantic model, retries once with the
-validation error as feedback, and logs every attempt.
-
-MOCK_SARVAM=true uses the caller's mock_fn instead of the network.
-"""
+"""Validated JSON generation through a locally hosted Ollama model."""
 import hashlib
 import json
 import threading
@@ -10,23 +6,25 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import TypeVar
 
+import httpx
 from pydantic import BaseModel, ValidationError
 
-from . import sarvam
 from .config import settings
 
 MAX_ATTEMPTS = 2
+T = TypeVar("T", bound=BaseModel)
 _log_lock = threading.Lock()
 _calls: Counter[str] = Counter()
 
 
 class LLMError(RuntimeError):
-    """The model answered, but never with output that passed validation."""
+    """The local model could not produce validated output."""
 
 
 class SoftCheck(ValueError):
-    """A check() failure worth one retry, but not worth failing the job: the last answer is kept."""
+    """A recoverable quality warning; accept the last answer if retry is exhausted."""
 
 
 def calls_for(pid: str) -> int:
@@ -37,7 +35,7 @@ def _log(entry: dict) -> None:
     d = settings.data_dir / "runtime" / "llm_log"
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{datetime.now(UTC).date()}.jsonl"
-    with _log_lock, path.open("a") as f:
+    with _log_lock, path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
@@ -48,34 +46,35 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-def _chat(messages: list[dict], reasoning_effort: str) -> tuple[str, dict]:
-    data = sarvam.post("/v1/chat/completions", {
-        "model": settings.llm_model,
-        "messages": messages,
-        "temperature": settings.llm_temperature,
-        "max_tokens": settings.llm_max_tokens,
-        # The API accepts only low/medium/high (despite its docs); null disables reasoning.
-        "reasoning_effort": None if reasoning_effort == "none" else reasoning_effort,
-        "response_format": {"type": "json_object"},
-    })
-    choice = data["choices"][0]
-    content = choice["message"].get("content") or ""
-    if not content and choice.get("finish_reason") == "length":
-        raise LLMError("response truncated by max_tokens (reasoning used the whole budget)")
-    return content, data.get("usage") or {}
+def _chat(messages: list[dict]) -> tuple[str, dict]:
+    try:
+        with httpx.Client(base_url=settings.ollama_base_url, timeout=settings.request_timeout_sec) as client:
+            response = client.post("/api/chat", json={
+                "model": settings.llm_model,
+                "messages": messages,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": settings.llm_temperature, "num_predict": settings.llm_max_tokens},
+            })
+            response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise LLMError(f"Ollama request failed: {type(exc).__name__}: {exc}") from exc
+    data = response.json()
+    return data.get("message", {}).get("content", ""), {
+        "prompt_eval_count": data.get("prompt_eval_count"),
+        "eval_count": data.get("eval_count"),
+    }
 
 
-def complete_json[T: BaseModel](
+def complete_json(
     *, pid: str, stage: str, prompt: str, model: type[T], mock_fn: Callable[[], T],
     system: str = "", check: Callable[[T], None] | None = None, reasoning_effort: str | None = None,
 ) -> T:
-    """check() may raise ValueError to reject bad output (triggers the retry). Raising SoftCheck
-    instead means the final attempt is accepted anyway, for problems a later stage can fix."""
-    mock = settings.mock_sarvam
-    schema = json.dumps(model.model_json_schema())
+    """Validate structured model output, retry once with the validation error."""
+    mock = settings.use_mock
+    schema = json.dumps(model.model_json_schema(), ensure_ascii=False)
     messages = [
-        {"role": "system", "content": f"{system}\n\nRespond with ONE JSON object and nothing else, "
-                                      f"matching this JSON Schema:\n{schema}".strip()},
+        {"role": "system", "content": f"{system}\n\nReturn one JSON object matching this schema:\n{schema}".strip()},
         {"role": "user", "content": prompt},
     ]
     _calls[pid] += 1
@@ -86,37 +85,32 @@ def complete_json[T: BaseModel](
         try:
             if mock:
                 result = model.model_validate(mock_fn())
-                response = result.model_dump(mode="json")
+                response = result.model_dump_json()
             else:
-                response, usage = _chat(messages, reasoning_effort or settings.reasoning_effort)
+                response, usage = _chat(messages)
                 result = model.model_validate(_extract_json(response))
             if check:
                 check(result)
             ok = True
             return result
-        except (ValueError, ValidationError) as e:  # JSONDecodeError and pydantic errors are ValueErrors
-            last_error = str(e)[:500]
+        except (ValueError, ValidationError) as exc:
+            last_error = str(exc)[:500]
             if mock:
                 raise
-            if isinstance(e, SoftCheck) and attempt == MAX_ATTEMPTS - 1 and result is not None:
+            if isinstance(exc, SoftCheck) and attempt == MAX_ATTEMPTS - 1 and result is not None:
                 return result
-            messages += [
+            messages.extend([
                 {"role": "assistant", "content": response},
-                {"role": "user", "content": f"That was invalid: {last_error}\nReturn corrected JSON only."},
-            ]
+                {"role": "user", "content": f"Your last JSON was invalid: {last_error}. Return corrected JSON only."},
+            ])
         finally:
             _log({
                 "at": datetime.now(UTC).isoformat(timespec="seconds"),
-                "performance_id": pid,
-                "stage": stage,
+                "performance_id": pid, "stage": stage,
                 "model": "mock" if mock else settings.llm_model,
-                "temperature": settings.llm_temperature,
                 "prompt_sha1": hashlib.sha1(prompt.encode()).hexdigest(),
-                "prompt": prompt[:4000],
-                "response": response,
-                "tokens": usage,
+                "prompt": prompt[:4000], "response": response, "tokens": usage,
                 "latency_ms": round((time.monotonic() - start) * 1000),
-                "validation_ok": ok,
-                "retry": attempt,
+                "validation_ok": ok, "retry": attempt,
             })
     raise LLMError(f"{stage}: invalid output after {MAX_ATTEMPTS} attempts: {last_error}")
