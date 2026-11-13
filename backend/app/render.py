@@ -20,7 +20,7 @@ def _synth_all(script: dict) -> tuple[dict[str, array], int]:
     segs = script["segments"]
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(
-            lambda seg: tts.synthesize(seg["text"], script["language"], seg["delivery"]["pace"]), segs
+            lambda seg: tts.synthesize(seg["text"], script["language"], seg["delivery"]["pace"], seg["delivery"].get("emotion", "devotional"), seg["delivery"].get("emphasis_words", [])), segs
         ))
     clips = {seg["id"]: samples for seg, (samples, _) in zip(segs, results, strict=True)}
     return clips, sum(hit for _, hit in results)
