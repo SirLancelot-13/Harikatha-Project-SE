@@ -117,7 +117,7 @@ def run_render_job(pid: str) -> None:
         timeline = [{
             **t, "section": by_id[t["id"]]["section"], "type": by_id[t["id"]]["type"],
             "audio": f"clips/{t['id']}.wav", "budget_sec": by_id[t["id"]]["target_sec"],
-            "overrun": round(rows[t["id"]]["overrun"], 3),
+            "overrun": round(rows[t["id"]]["overrun"], 3), "scene": by_id[t["id"]].get("scene"),\n            "emotion": by_id[t["id"]]["delivery"].get("emotion", "devotional"),
         } for t in result.timeline]
         version = store.read(pid, "meta.json")["script_versions"][-1]["v"]
         store.write_json(pid, "timeline.json", {
