@@ -3,9 +3,9 @@ name: backend
 on:
   push:
     branches: [main]
-    paths: ["backend/**", ".github/workflows/backend.yml"]
+    paths: ["backend/**", "local_tts/**", ".github/workflows/backend.yml"]
   pull_request:
-    paths: ["backend/**", ".github/workflows/backend.yml"]
+    paths: ["backend/**", "local_tts/**", ".github/workflows/backend.yml"]
 
 jobs:
   check:
@@ -23,5 +23,5 @@ jobs:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
       - run: uv sync --locked
-      - run: uv run ruff check .
+      - run: uv run ruff check . ../local_tts
       - run: uv run pytest -q

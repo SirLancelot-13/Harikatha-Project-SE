@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -40,6 +41,12 @@ class Settings(BaseSettings):
     request_timeout_sec: float = 120.0
     max_retries: int = 3
     retry_delay_sec: float = 1.0
+
+    @field_validator("tts_provider", "llm_provider", mode="before")
+    @classmethod
+    def _lenient_provider(cls, v):
+        """`TTS_PROVIDER=Auto ` in .env should work, not crash the server at startup."""
+        return v.strip().lower() if isinstance(v, str) else v
 
     @property
     def performances_dir(self) -> Path:

@@ -406,3 +406,14 @@ def test_backend_keeps_a_songs_lines_for_the_local_voice_and_flattens_them_for_b
     assert tts.split_song("aaaa\nbbbb\ncccc", limit=9) == ["aaaa\nbbbb", "cccc"]  # whole lines only
     assert tts.split_song("one line only.") == ["one line only."]
     assert tts.flatten_lines("no newline here") == "no newline here"
+
+
+def test_provider_settings_tolerate_case_and_whitespace_but_reject_nonsense():
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    s = Settings(tts_provider=" Auto ", llm_provider="LOCAL")
+    assert (s.tts_provider, s.llm_provider) == ("auto", "local")
+    with pytest.raises(ValidationError):
+        Settings(tts_provider="cloud")

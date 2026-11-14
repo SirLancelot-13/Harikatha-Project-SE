@@ -8,7 +8,8 @@
 
 {
   # https://devenv.sh/basics/
-  env.DATA_DIR = "${config.devenv.root}/backend/data";
+  # App settings (MOCK_SARVAM, TTS_PROVIDER, DATA_DIR, ...) belong in .env, NOT in env.* here: a variable
+  # set in nix silently overrides .env (it once forced mock mode). Only tool/library paths go here.
   # numpy's manylinux wheels need these shared libraries, which nix does not put on the default path
   env.LD_LIBRARY_PATH = lib.makeLibraryPath [
     pkgs.zlib
@@ -22,6 +23,8 @@
     pkgs.ffmpeg # MP3 export
     pkgs.libsndfile # WAV I/O (soundfile)
     pkgs.gcc # building pyworld
+    pkgs.jq # sounds/fetch_sounds.sh
+    pkgs.curl # sounds/fetch_sounds.sh
   ];
 
   # https://devenv.sh/languages/
@@ -46,7 +49,7 @@
   processes.frontend.exec = "cd frontend && npm run dev";
 
   # https://devenv.sh/scripts/
-  scripts.lint.exec = "cd $DEVENV_ROOT/backend && ruff check .";
+  scripts.lint.exec = "cd $DEVENV_ROOT/backend && ruff check . ../local_tts";
   scripts.test-backend.exec = "cd $DEVENV_ROOT/backend && pytest";
   scripts.build-frontend.exec = "cd $DEVENV_ROOT/frontend && npm ci && npm run build";
   # Local open-source TTS server (separate environment, see local_tts/SETUP.txt). Not part of `devenv up`.
@@ -65,7 +68,12 @@
 
   # https://devenv.sh/tests/
   enterTest = ''
-    cd backend && ruff check . && pytest
+    set -e  # stop at the first failure (do not rely on the runner doing this)
+    echo "== enterTest: backend lint + tests"
+    (cd backend && ruff check . ../local_tts && pytest -q --color=no)
+    echo "== enterTest: frontend build"
+    (cd frontend && npm run build)
+    echo "== enterTest: done"
   '';
 
   # https://devenv.sh/git-hooks/
