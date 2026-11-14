@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Harikatha: a lit lamp">
+  <!-- Maroon tile, the app's heading colour -->
+  <rect width="64" height="64" rx="13" fill="#7b1e2e"/>
+  <!-- The flame (saffron) -->
+  <path fill="#f4a62a" d="M32 3C33 13 48 20 48 34c0 10-6.500 16-16 16S16 44 16 34c0-7 4-11 8-15 1 5 3 7.500 5 7.500C27.500 18 29.500 10 32 3z"/>
+  <!-- The inner flame (parchment) -->
+  <path fill="#fff1d6" d="M32 26c1.500 6.500 8.500 9 8.500 16 0 4.500-3.500 7-8.500 7s-8.500-2.500-8.500-7c0-5 6-9 8.500-16z"/>
+  <!-- The lamp bowl (parchment) -->
+  <path fill="#fff1d6" d="M7 50h50c0 8-11 12-25 12S7 58 7 50z"/>
+</svg>

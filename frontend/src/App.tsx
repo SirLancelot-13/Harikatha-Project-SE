@@ -12,8 +12,8 @@ import GenerateForm from "./GenerateForm";
 import Player from "./Player";
 import RatingForm from "./RatingForm";
 import ScriptView from "./ScriptView";
-
-const RUNNING = new Set(["analysing", "planning", "writing", "queued", "synthesizing", "rewriting", "modulating", "mixing"]);
+import { RUNNING } from "./stages";
+import StatusCard from "./StatusCard";
 
 function saveJson(name: string, data: unknown) {
   const a = document.createElement("a");
@@ -64,36 +64,28 @@ export default function App() {
 
   return (
     <main>
-      <h1>Harikatha</h1>
+      <header className="masthead">
+        <h1 className="brand">Harikatha</h1>
+        <p className="tagline">Tell a story, and hear it told.</p>
+        <div className="ornament" aria-hidden="true" />
+      </header>
+
       {serverMock && (
-        <p className="warn">
+        <p className="callout warn">
           Mock mode: the server uses placeholder text and a synthetic tone instead of Sarvam. Set MOCK_SARVAM=false in .env
           and restart.
         </p>
       )}
       <GenerateForm busy={running} onSubmit={onGenerate} />
-      {error && <p className="error">{error}</p>}
+      {error && (
+        <p className="callout error" role="alert">
+          {error}
+        </p>
+      )}
 
       {perf && (
         <>
-          <div className="card">
-            <b>{perf.request.title}</b> · {perf.status.stage}
-            {perf.status.detail && ` (${perf.status.detail})`}
-            {perf.status.script_version && ` · script v${perf.status.script_version}`}
-            {perf.status.tts_backend && perf.status.tts_backend !== "mock" && ` · voice: ${perf.status.tts_backend}`}
-            {perf.status.progress !== null && RUNNING.has(perf.status.stage) && (
-              <progress value={perf.status.progress} max={1} />
-            )}
-            {perf.mock && <p className="warn">This performance was made in mock mode (placeholder audio).</p>}
-            {perf.status.stage === "error" && <p className="error">{perf.status.detail}</p>}
-            {perf.script && (
-              <div className="row">
-                <button disabled={running} onClick={() => render(perf.id).then(() => refresh(perf.id)).catch(fail)}>
-                  Render performance
-                </button>
-              </div>
-            )}
-          </div>
+          <StatusCard perf={perf} running={running} onRender={() => render(perf.id).then(() => refresh(perf.id)).catch(fail)} />
 
           {perf.status.stage === "done" && perf.timeline && (
             <>

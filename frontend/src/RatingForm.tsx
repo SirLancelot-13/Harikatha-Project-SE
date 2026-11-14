@@ -13,7 +13,7 @@ export default function RatingForm({ id }: { id: string }) {
   const [comment, setComment] = useState("");
   const [sent, setSent] = useState(false);
 
-  if (sent) return <p className="card">Thanks for rating.</p>;
+  if (sent) return <p className="card thanks">Thanks for rating.</p>;
   return (
     <form
       className="card form"
@@ -24,21 +24,28 @@ export default function RatingForm({ id }: { id: string }) {
         setSent(true);
       }}
     >
-      <h3>Rate this performance</h3>
-      {FIELDS.map((f) => (
-        <label key={f}>
-          {f.replace("_", " ")}: {scores[f]}
-          <input
-            type="range"
-            min={1}
-            max={5}
-            value={scores[f]}
-            onChange={(e) => setScores({ ...scores, [f]: +e.target.value })}
-          />
-        </label>
-      ))}
-      <textarea placeholder="Comment (optional)" value={comment} onChange={(e) => setComment(e.target.value)} />
-      <button type="submit">Submit rating</button>
+      <h2 className="card-title">Rate this performance</h2>
+      <p className="hint">1 is poor, 5 is excellent. Your rating helps us tune how it sounds.</p>
+      <div className="ratings">
+        {FIELDS.map((f) => (
+          <label key={f} className="rating">
+            <span className="rating-name">{f.replace("_", " ")}</span>
+            <input
+              type="range"
+              min={1}
+              max={5}
+              value={scores[f]}
+              aria-valuetext={`${scores[f]} out of 5`}
+              onChange={(e) => setScores({ ...scores, [f]: +e.target.value })}
+            />
+            <span className="rating-value">{scores[f]}</span>
+          </label>
+        ))}
+      </div>
+      <textarea placeholder="Comment (optional)" aria-label="Comment (optional)" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} />
+      <button type="submit" className="btn primary">
+        Submit rating
+      </button>
     </form>
   );
 }
