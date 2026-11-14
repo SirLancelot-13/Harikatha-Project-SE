@@ -13,7 +13,7 @@ export default function GenerateForm({ busy, onSubmit }: { busy: boolean; onSubm
   const [title, setTitle] = useState("");
   const [story, setStory] = useState("");
   const [language, setLanguage] = useState("en-IN");
-  const [minutes, setMinutes] = useState(8);
+  const [minutes, setMinutes] = useState(4);
 
   return (
     <form
@@ -35,7 +35,7 @@ export default function GenerateForm({ busy, onSubmit }: { busy: boolean; onSubm
         </select>
         <label>
           Minutes{" "}
-          <input type="number" min={1} max={60} value={minutes} onChange={(e) => setMinutes(+e.target.value)} />
+          <input type="number" min={2} max={60} value={minutes} onChange={(e) => setMinutes(+e.target.value)} />
         </label>
         <button type="submit" disabled={busy}>
           Generate script

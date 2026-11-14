@@ -59,3 +59,10 @@ Swapping in another model later
 Only tts_server.py knows about Parler. Another engine needs to implement load() and
 synthesize(text, language, pace, kind, speaker) -> float32 audio at 24 kHz, and be selectable via
 LOCAL_TTS_ENGINE. The backend does not change.
+
+Tuning the voice
+----------------
+local_tts/tune_description.py compares description wordings numerically (pitch spread, loudness
+variation, pauses, speed) and saves the clips to local_tts/samples/tune/ for listening. With the
+server running, from backend/:  python -W ignore ../local_tts/tune_description.py
+The description for each segment type lives in _STYLE / describe() in tts_server.py.

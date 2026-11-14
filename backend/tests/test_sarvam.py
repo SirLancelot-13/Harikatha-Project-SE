@@ -274,3 +274,63 @@ def test_critique_failure_does_not_lose_the_script(tmp_path, monkeypatch):
     assert store.read(pid, "status.json")["stage"] == "scripted"
     stage = store.read(pid, "stages/05_critique.json")
     assert stage["ok"] is True and "truncated" in stage["skipped"]
+
+
+def test_writer_is_told_each_sections_purpose_and_sees_the_whole_verse_it_must_explain(live):
+    from app.schemas import GenerateRequest
+
+    verse = "यदा यदा हि धर्मस्य ग्लानिर्भवति भारत। अभ्युत्थानमधर्मस्य तदात्मानं सृजाम्यहम्॥ " * 3  # > 160 chars
+    corpus = {"v1": {"id": "v1", "title": "a verse", "text": verse}}
+    req = GenerateRequest(title="t", story="s", language="hi-IN", duration_minutes=4)
+    analysis = StoryAnalysis(characters=[], events=[f"e{i}" for i in range(6)], deity="Vishnu", bhava="bhakti", moral="surrender")
+    budgets = {b.section: b for b in planner.budget(req, analysis, 13.2)}
+    reply = json.dumps({"slots": [{"source_id": "v1"}, {"text": "इस श्लोक का अर्थ यह है कि प्रभु सदा रक्षा करते हैं और भक्त को शरण देते हैं।"}]})
+    reqs = live(lambda r: _chat_reply(reply))
+    out = planner.write_section("p", req, analysis, budgets["shloka_meaning"], ["v1"], corpus)
+    assert out.slots[0].source_id == "v1"
+    prompt = json.loads(reqs[0].content)["messages"][1]["content"]
+    assert verse[:300] in prompt  # the full verse, not the 160-character preview used elsewhere
+    assert "Purpose: first a shloka" in prompt and "unpacks that shloka's meaning" in prompt
+    system = json.loads(reqs[0].content)["messages"][0]["content"]
+    assert "MUST explain the shloka in the slot before it" in system
+
+    reply2 = json.dumps({"slots": [{"text": "कथा का पहला भाग यहाँ सुनाया जाता है।"}]})
+    reqs = live(lambda r: _chat_reply(reply2))
+    planner.write_section("p", req, analysis, budgets["nirupana_1"], [], {})
+    prompt = json.loads(reqs[-1].content)["messages"][1]["content"]  # the fixture's list keeps earlier requests
+    assert "part 1 of 2 of the story" in prompt and "do not wrap up the whole story" in prompt
+    assert "e0; e1; e2" in prompt and "e3" not in prompt  # contiguous events, nothing from the other part
+
+
+def test_writer_asks_for_songs_as_even_rhyming_lines_and_retries_a_one_line_song(live):
+    from app.schemas import GenerateRequest
+
+    req = GenerateRequest(title="t", story="s", language="hi-IN", duration_minutes=4)
+    analysis = StoryAnalysis(characters=[], events=["e1", "e2"], deity="Vishnu", bhava="bhakti", moral="m")
+    song_budget = {b.section: b for b in planner.budget(req, analysis, 13.2)}["opening_song"]
+
+    one_line = json.dumps({"slots": [{"text": "हे प्रभु हे दयानिधान करुणा की मूरत हमारी रक्षा करो आज"}]})
+    reqs = live(lambda r: _chat_reply(one_line))
+    out = planner.write_section("p", req, analysis, song_budget, [], {})
+    assert len(reqs) == 2 and "\n" not in out.slots[0].text  # one retry asking for lines, then accepted (a later stage can fix it)
+    system = json.loads(reqs[0].content)["messages"][0]["content"]
+    assert "ONE LINE PER LINE" in system and "rhyming" in system and "8 to 12 syllables" in system
+    assert "short rhyming lines, one per line" in json.loads(reqs[1].content)["messages"][-1]["content"]
+
+    lines = json.dumps({"slots": [{"text": "हे प्रभु हे दयानिधान,\nकरुणा की तुम हो खान।\nसुन लो भक्त पुकार,\nकरो हमारा उद्धार॥"}]})
+    reqs = live(lambda r: _chat_reply(lines))
+    out = planner.write_section("p", req, analysis, song_budget, [], {})
+    assert len(reqs) == 3 and out.slots[0].text.count("\n") == 3  # the fixture list is shared: exactly one new request
+    segs = planner.assemble(song_budget, out, {})
+    assert segs[0].text.count("\n") == 3  # line breaks survive assembly
+
+
+def test_rewriting_a_song_keeps_it_as_lines(live):
+    reqs = live(lambda r: _chat_reply(json.dumps({"text": "पहली,\nदूसरी॥"})))
+    seg = {"id": "opening_song.1", "type": "song", "text": "कोई लंबा गीत\nजिसकी दो पंक्तियाँ हैं"}
+    out = planner.rewrite_segment("p", seg, "shorten", 40, "hi-IN")
+    assert out == "पहली,\nदूसरी॥"
+    assert "keep it as short separate lines" in json.loads(reqs[-1].content)["messages"][1]["content"]
+    narration = {"id": "x.1", "type": "narration", "text": "कोई कथा"}
+    planner.rewrite_segment("p", narration, "shorten", 40, "hi-IN")
+    assert "keep it as short separate lines" not in json.loads(reqs[-1].content)["messages"][1]["content"]

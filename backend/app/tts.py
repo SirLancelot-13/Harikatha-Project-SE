@@ -36,6 +36,31 @@ def split_text(text: str, limit: int = MAX_CHUNK_CHARS) -> list[str]:
     return chunks or [text]
 
 
+def split_song(text: str, limit: int = MAX_CHUNK_CHARS) -> list[str]:
+    """A song keeps its line breaks, so the local voice can read its line length and rhyme.
+    Chunks are whole groups of lines (never part of a line), joined with newlines."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 2:
+        return split_text(text)
+    chunks: list[str] = []
+    current: list[str] = []
+    for line in lines:
+        if current and len("\n".join([*current, line])) > limit:
+            chunks.append("\n".join(current))
+            current = []
+        current.append(line)
+    chunks.append("\n".join(current))
+    return chunks
+
+
+def flatten_lines(text: str) -> str:
+    """For voices that read plain text (Bulbul): one line of text, each line end kept as a small pause."""
+    if "\n" not in text:
+        return text
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return " ".join(ln if ln[-1] in ".,;:!?।॥" else ln + "," for ln in lines)
+
+
 # --- choosing a backend --------------------------------------------------------
 
 def voice_id(backend: str) -> str:
@@ -147,7 +172,12 @@ def synthesize(
 ) -> tuple[array, bool]:
     """Returns (samples, all_chunks_cached). Mock mode always wins: it never uses the network."""
     backend = "mock" if settings.mock_sarvam else (backend or "sarvam")
-    chunks = [text] if backend == "mock" else split_text(text)
+    if backend == "mock":
+        chunks = [text]
+    elif backend == "local" and kind == "song":
+        chunks = split_song(text)  # the local voice is told how the song is built, so keep its lines
+    else:
+        chunks = split_text(flatten_lines(text))
     out, all_hit = array("h"), True
     for chunk in chunks:
         samples, hit = _synth_chunk(chunk, language, pace, kind, backend)

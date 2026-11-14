@@ -93,8 +93,9 @@ def test_shlokas_get_a_default_lift_and_other_segments_do_not(tmp_path, monkeypa
     pid, c = _render(tmp_path, monkeypatch)
     segs = c.get(f"/api/v1/performances/{pid}").json()["script"]["segments"]
     lifts = {s["id"]: s["delivery"]["pitch_lift_st"] for s in segs}
-    assert lifts["invocation.1"] == lifts["mangalam.1"] == settings.shloka_lift_st
-    assert all(v == 0 for k, v in lifts.items() if k not in {"invocation.1", "mangalam.1"})
+    shlokas = {"invocation.1", "shloka_meaning.1", "mangalam.1"}  # not the meaning narration after the shloka
+    assert all(lifts[k] == settings.shloka_lift_st for k in shlokas)
+    assert all(v == 0 for k, v in lifts.items() if k not in shlokas)
 
 
 def test_render_applies_the_lift_only_to_shlokas_and_keeps_the_timeline(tmp_path, monkeypatch):

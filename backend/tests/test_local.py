@@ -307,13 +307,31 @@ def test_server_reports_engine_failures_as_500(monkeypatch):
     assert r.status_code == 500 and "CUDA out of memory" in r.json()["detail"]
 
 
-def test_voice_description_and_speaker_coverage():
-    d = tts_server.describe("Rohit", "shloka", 0.8)
-    assert d.startswith("Rohit speaks slowly") and "devotional" in d and "very close up" in d
-    assert "fast" in tts_server.describe("Rohit", "narration", 1.5)
-    assert "moderate speed" in tts_server.describe("Rohit", "narration", 1.0)
+def test_voice_description_carries_emphasis_emotion_and_pace_per_kind():
+    narration = tts_server.describe("Rohit", "narration", 1.0)
+    shloka = tts_server.describe("Rohit", "shloka", 1.0)
+    song = tts_server.describe("Rohit", "song", 1.0)
+    for d in (narration, shloka, song):
+        assert d.startswith("Rohit speaks") and "emphasis" in d and "very close up" in d and "balanced pitch" in d
+    assert "emotive" in narration and "stressing the important words" in narration and "lively pace" in narration
+    assert "reverent" in shloka and "devotional" in shloka and "measured pace" in shloka  # shlokas stay calm
+    assert "joyful" in song and "melodic" in song
+    assert tts_server.describe("Rohit", "narration", 0.8).startswith("Rohit speaks slowly")
+    assert "speaks fast" in tts_server.describe("Rohit", "narration", 1.5)
+    assert "measured pace" in tts_server.describe("Rohit", "narration", 0.9)
+    assert tts_server.describe("Rohit", "shout", 1.0).count("emotive") == 1  # unknown kinds use the narration style
     assert set(tts_server.PARLER_LANGUAGES) == set(tts_server.DEFAULT_SPEAKERS)
     assert "pa-IN" not in tts_server.PARLER_LANGUAGES  # only "unofficial" on the model card
+
+
+def test_tuning_hooks_are_validated_and_reach_the_engine(monkeypatch):
+    engine = tts_server.StubEngine()
+    seen = {}
+    monkeypatch.setattr(engine, "synthesize", lambda *a: seen.setdefault("args", a) and np.zeros(4800, dtype=np.float32))
+    c = TestClient(tts_server.create_app(engine))
+    ok = c.post("/synthesize", json={"text": "x", "language_code": "hi-IN", "description": "{speaker} speaks", "seed": 3, "temperature": 0.9})
+    assert ok.status_code == 200 and seen["args"][-3:] == ("{speaker} speaks", 3, 0.9)
+    assert c.post("/synthesize", json={"text": "x", "language_code": "hi-IN", "temperature": 5}).status_code == 422
 
 
 def test_backend_client_and_server_agree_end_to_end(server, live, monkeypatch):
@@ -327,3 +345,64 @@ def test_backend_client_and_server_agree_end_to_end(server, live, monkeypatch):
     assert len(samples) > RATE // 4 and seen["sarvam"] == []
     assert tts.pick_backend("pa-IN")[0] == "sarvam"  # the stub does not serve Punjabi: fall back
     assert np.abs(np.asarray(samples, dtype=np.float32)).max() > 0
+
+
+# --- songs: the voice is told how the song is built ------------------------------------------
+
+ABAB = "हे नारायण, हे दयानिधान,\nसुन लो भक्त की करुण पुकार।\nगरुड़ चढ़कर आओ भगवान,\nकर दो प्रभु अब बेड़ा पार॥"
+REFRAIN = "हरि बोल, हरि बोल, हरि बोल मन मेरे,\nहरि के चरणों में हैं सुख के सवेरे।\nहरि बोल, हरि बोल, हरि बोल मन मेरे,\nमिट जाएंगे जीवन के सारे अँधेरे॥"
+
+
+def test_syllables_lines_and_rhyme_scheme():
+    assert tts_server.count_syllables("राम") == 2 and tts_server.count_syllables("कृष्ण") == 2  # virama joins, not counted
+    assert tts_server.count_syllables("नमो भगवते वासुदेवाय") == 11
+    assert tts_server.count_syllables("hello world today") == 5  # fallback: vowel groups
+    assert len(tts_server.split_song_lines(ABAB)) == 4
+    assert tts_server.split_song_lines("हरि बोल। हरि बोल। हरि बोल।") == ["हरि बोल।", "हरि बोल।", "हरि बोल।"]  # one paragraph
+    assert tts_server.rhyme_scheme(tts_server.split_song_lines(ABAB)) == "ABAB"
+    assert tts_server.rhyme_scheme(["a cat", "a dog", "a bat", "a log"]) == "ABAB"
+    assert tts_server.rhyme_scheme(["the sun", "a moon", "one more"]) == "ABC"
+
+
+def test_song_analysis_and_clause():
+    a = tts_server.analyse_song(ABAB)
+    assert len(a["lines"]) == 4 and a["scheme"] == "ABAB" and a["rhymed"] and not a["refrain"]
+    assert 9 <= a["typical"] <= 14 and a["spread"] <= 4
+    clause = tts_server.song_clause(ABAB)
+    assert "song of four short lines" in clause and "rhyming in an ABAB pattern" in clause and "feel even" in clause
+    assert "sing-song" in clause and "pause between the lines" in clause and "refrain" not in clause
+    assert "repeated refrain" in tts_server.song_clause(REFRAIN)
+    uneven = "हरि\nहे प्रभु दीनदयाल करुणा के सागर नाथ हमारे\nराम"
+    assert "syllables" in tts_server.song_clause(uneven) and "feel even" not in tts_server.song_clause(uneven)
+    assert "short devotional song" in tts_server.song_clause("एक पंक्ति")  # a single line: no structure to describe
+
+
+def test_song_description_only_for_songs_and_only_when_text_is_given():
+    song = tts_server.describe("Rohit", "song", 1.0, ABAB)
+    assert song.startswith("Rohit speaks") and "ABAB" in song and song.endswith("very close up.")
+    assert "ABAB" not in tts_server.describe("Rohit", "narration", 1.0, ABAB)  # narration is not analysed
+    assert "song of" not in tts_server.describe("Rohit", "song", 1.0)  # no text, no clause (and no crash)
+
+
+def test_song_text_ends_every_line_in_punctuation_so_the_voice_pauses():
+    out = tts_server.song_text("हरि बोल\nराम बोल,\nकृष्ण बोल")
+    assert out == "हरि बोल, राम बोल, कृष्ण बोल।"
+    assert tts_server.song_text("one\ntwo.") == "one, two."
+    assert tts_server.song_text("ऐसे ही।\nवैसे ही।") == "ऐसे ही। वैसे ही।"
+
+
+def test_backend_keeps_a_songs_lines_for_the_local_voice_and_flattens_them_for_bulbul(live, monkeypatch):
+    seen = live(local_handler=healthy_local(), sarvam_handler=sarvam_tts)
+    monkeypatch.setattr(settings, "tts_provider", "local")
+    tts.synthesize(ABAB, "hi-IN", 1.0, "song", backend="local")
+    sent = json.loads(next(r for r in seen["local"] if r.url.path == "/synthesize").content)["text"]
+    assert sent.count("\n") == 3 and sent.splitlines()[0] == "हे नारायण, हे दयानिधान,"
+
+    tts.synthesize("पहली पंक्ति\nदूसरी पंक्ति।", "hi-IN", 1.0, "song", backend="sarvam")
+    body = json.loads(seen["sarvam"][-1].content)["text"]
+    assert "\n" not in body and body == "पहली पंक्ति, दूसरी पंक्ति।"  # each line end is still a small pause
+
+    assert tts.split_song("a\nb\nc", limit=100) == ["a\nb\nc"]
+    assert tts.split_song("aaaa\nbbbb\ncccc", limit=9) == ["aaaa\nbbbb", "cccc"]  # whole lines only
+    assert tts.split_song("one line only.") == ["one line only."]
+    assert tts.flatten_lines("no newline here") == "no newline here"

@@ -1,5 +1,6 @@
 """Script generation, stages 1-5 of WORKFLOW_AND_STORAGE.md s2.2."""
 import json
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -19,8 +20,35 @@ from .schemas import (
     StoryAnalysis,
 )
 
-# Fraction of total time per section kind; nirupana shares whatever is left.
-_FIXED = {"invocation": 0.05, "prastavana": 0.15, "mangalam": 0.05}
+# The shape of a performance. Each slot is (type, share of the total time, minimum seconds); the minimums
+# keep a 2-minute performance workable. The story parts ("nirupana") sit between the opening and the
+# closing blocks and are ELASTIC: they take whatever time the other blocks leave (about 55-60%).
+_OPENING = [
+    ("invocation", [("shloka", 0.04, 5)]),
+    ("opening_song", [("song", 0.08, 12)]),
+    ("prastavana", [("narration", 0.08, 10)]),
+]
+_CLOSING = [
+    ("shloka_meaning", [("shloka", 0.04, 6), ("narration", 0.10, 12)]),  # a shloka, then its meaning unpacked
+    ("closing_verses", [("song", 0.06, 10)]),
+    ("mangalam", [("shloka", 0.04, 5)]),
+]
+_STORY_PART_SEC = 75  # aim for story parts of about this length
+_MAX_PARTS = 6
+
+# What each section is for; passed to the writer.
+_PURPOSE = {
+    "invocation": "the opening invocation: a short prayer to the deity before the story begins",
+    "opening_song": "a short devotional song that opens the performance, praising the deity and hinting at the theme",
+    "prastavana": "a warm introduction to the audience that sets up the story and why it matters",
+    "nirupana": "part {part} of {parts} of the story, told in order: cover only the events listed, flow naturally "
+                "from the previous part, and do not wrap up the whole story unless this is the last part",
+    "shloka_meaning": "first a shloka that captures the story's central teaching, then a narration that unpacks "
+                      "that shloka's meaning in simple words and ties it back to the story",
+    "closing_verses": "a short devotional verse offering the story's teaching and surrender to the Lord, "
+                      "leading into the final blessing",
+    "mangalam": "the closing benediction shloka that ends the performance",
+}
 
 _PERSONA = (
     "You are a Harikatha storyteller: you retell Hindu devotional stories as a spoken-and-sung "
@@ -57,26 +85,32 @@ def analyse(pid: str, req: GenerateRequest) -> StoryAnalysis:
 
 def budget(req: GenerateRequest, analysis: StoryAnalysis, cps: float) -> list[SectionBudget]:
     total = req.duration_minutes * 60
-    n_nir = max(1, min(4, req.duration_minutes // 2))
-    nir_sec = total * (1 - sum(_FIXED.values())) / n_nir
 
-    def slots(types: list[str], sec: float) -> list[Slot]:
-        each = sec / len(types)
-        return [Slot(type=t, target_sec=each, target_chars=round(each * cps)) for t in types]
+    def block(section: str, specs: list[tuple[str, float, float]]) -> SectionBudget:
+        slots = []
+        for typ, share, minimum in specs:
+            sec = max(float(minimum), total * share)
+            slots.append(Slot(type=typ, target_sec=sec, target_chars=round(sec * cps)))
+        return SectionBudget(
+            section=section, kind=section, target_sec=sum(s.target_sec for s in slots), slots=slots
+        )
 
-    def fixed(kind: str, types: list[str]) -> SectionBudget:
-        sec = total * _FIXED[kind]
-        return SectionBudget(section=kind, kind=kind, target_sec=sec, slots=slots(types, sec))
-
-    chunks = [analysis.events[i::n_nir] for i in range(n_nir)]
-    out = [fixed("invocation", ["shloka"]), fixed("prastavana", ["narration"])]
-    out += [
-        SectionBudget(section=f"nirupana_{i + 1}", kind="nirupana", target_sec=nir_sec,
-                      events=chunks[i], slots=slots(["narration", "song", "narration"], nir_sec))
-        for i in range(n_nir)
-    ]
-    out.append(fixed("mangalam", ["shloka"]))
-    return out
+    opening = [block(name, specs) for name, specs in _OPENING]
+    closing = [block(name, specs) for name, specs in _CLOSING]
+    story_total = max(25.0, total - sum(b.target_sec for b in opening + closing))
+    n = min(_MAX_PARTS, max(1, math.ceil(story_total / _STORY_PART_SEC)), max(1, len(analysis.events)))
+    each = story_total / n
+    base, extra = divmod(len(analysis.events), n)  # contiguous chunks, in story order
+    story, start = [], 0
+    for i in range(n):
+        size = base + (1 if i < extra else 0)
+        story.append(SectionBudget(
+            section=f"nirupana_{i + 1}", kind="nirupana", target_sec=each, part=i + 1, parts=n,
+            events=analysis.events[start: start + size],
+            slots=[Slot(type="narration", target_sec=each, target_chars=round(each * cps))],
+        ))
+        start += size
+    return opening + story + closing
 
 
 # --- stage 3 -------------------------------------------------------------
@@ -84,7 +118,8 @@ def budget(req: GenerateRequest, analysis: StoryAnalysis, cps: float) -> list[Se
 def retrieve(req: GenerateRequest, analysis: StoryAnalysis, budgets: list[SectionBudget]) -> dict:
     """Offer verified corpus records per section. Only IDs are stored."""
     corpus = _load_corpus().values()
-    kinds = {"invocation": "shloka", "mangalam": "shloka", "nirupana": "song"}
+    kinds = {"invocation": "shloka", "shloka_meaning": "shloka", "mangalam": "shloka",
+             "opening_song": "song", "closing_verses": "song"}
     result = {}
     for b in budgets:
         kind = kinds.get(b.kind)
@@ -104,6 +139,13 @@ def retrieve(req: GenerateRequest, analysis: StoryAnalysis, budgets: list[Sectio
 
 # --- stage 4 -------------------------------------------------------------
 
+def _mock_text(slot_type: str, b: SectionBudget) -> str:
+    """Placeholder text for mock mode. Songs follow the same rule as real ones: several short lines."""
+    if slot_type == "song":
+        return f"[mock song for {b.section}]\n" + (" ".join(b.events) or "[mock second line]")
+    return f"[mock {slot_type} for {b.section}] " + " ".join(b.events)
+
+
 def write_section(
     pid: str, req: GenerateRequest, analysis: StoryAnalysis, b: SectionBudget, offered: list[str],
     corpus: dict[str, dict],
@@ -111,17 +153,20 @@ def write_section(
     slot_lines = "\n".join(
         f"{i}. type={s.type}, about {s.target_chars} characters" for i, s in enumerate(b.slots, 1)
     )
+    # For "a shloka and its meaning" the writer must see the whole verse it is about to explain.
+    shown = 600 if b.kind == "shloka_meaning" else 160
     offered_lines = "\n".join(
-        f"- id={i}: {corpus[i].get('title', '')} :: {corpus[i]['text'][:160]}" for i in offered
+        f"- id={i}: {corpus[i].get('title', '')} :: {corpus[i]['text'][:shown]}" for i in offered
     ) or "(none)"
+    purpose = _PURPOSE[b.kind].format(part=b.part, parts=b.parts)
     lang = languages.name(req.language)
     prompt = (
         f"Write the spoken text in {lang}. The story and events below may be in another language: "
         f"retell them in {lang}, do not copy their wording.\n"
         f"Story: {req.title}\nDeity: {analysis.deity}; bhava: {analysis.bhava}; moral: {analysis.moral}\n"
         f"Characters: {', '.join(analysis.characters) or 'n/a'}\n"
-        f"Section: {b.section} ({b.kind})\nEvents to cover in this section: "
-        f"{'; '.join(b.events) or 'n/a'}\n\nWrite exactly {len(b.slots)} slot(s), in order:\n{slot_lines}\n\n"
+        f"Section: {b.section} ({b.kind}). Purpose: {purpose}.\n"
+        f"Events to cover in this section: {'; '.join(b.events) or 'n/a'}\n\nWrite exactly {len(b.slots)} slot(s), in order:\n{slot_lines}\n\n"
         f"Verified traditional texts you may use verbatim:\n{offered_lines}"
     )
 
@@ -136,13 +181,14 @@ def write_section(
             if not slot.source_id and (why := languages.problem(slot.text, req.language)):
                 err = llm.SoftCheck if "Marathi" in why else ValueError  # wrong script is fatal, drift is not
                 raise err(f"slot {i}: {why}")
+            if want.type == "song" and not slot.source_id and len([ln for ln in slot.text.splitlines() if ln.strip()]) < 2:
+                raise llm.SoftCheck(f"slot {i}: write the song as 4 to 8 short rhyming lines, one per line")
             if not slot.source_id and len(slot.text) > want.target_chars * 1.25 + 20:
                 raise llm.SoftCheck(f"slot {i}: {len(slot.text)} chars, limit is about {want.target_chars}")
 
     def mock() -> SectionOutput:
         return SectionOutput(slots=[
-            SlotText(text=(f"[mock {s.type} for {b.section}] " + " ".join(b.events))[: max(s.target_chars, 20)])
-            for s in b.slots
+            SlotText(text=_mock_text(s.type, b)[: max(s.target_chars, 40)]) for s in b.slots
         ])
 
     return llm.complete_json(
@@ -150,8 +196,11 @@ def write_section(
         check=check, reasoning_effort=settings.writing_reasoning_effort,
         system=_PERSONA + f" ALWAYS write in {lang}, in its own script, whatever language the story "
         f"is told in; keep names of people and places but transliterate them. Fill each slot in order. 'shloka' slots: a short devotional invocation or "
-        "benediction. 'narration' slots: spoken storytelling that follows the events. 'song' slots: a "
-        "short devotional verse. NEVER quote scripture or classical songs from memory and never claim "
+        "benediction. When a section is 'a shloka then its meaning', the narration slot MUST explain the "
+        "shloka in the slot before it (if that slot uses an offered text, explain that text) in simple words. 'narration' slots: spoken storytelling that follows the events. 'song' slots: a "
+        "short devotional song written as 4 to 8 short lines, ONE LINE PER LINE of the text (separated by "
+        "newlines), each line about the same length (say 8 to 12 syllables), with the line endings rhyming "
+        "(couplets AABB or alternating ABAB, or a repeated refrain line); it must sing well when read aloud. NEVER quote scripture or classical songs from memory and never claim "
         "a line comes from a scripture or composer. To use a traditional text, set that slot's "
         "source_id to one of the offered ids (text is then ignored); otherwise write original text "
         "and leave source_id null. Stay at or under the character count for each slot.",
@@ -198,7 +247,8 @@ def critique(pid: str, script: Script, analysis: StoryAnalysis) -> Critique:
 def rewrite_segment(pid: str, seg: dict, instruction: str, max_chars: int, language: str) -> str:
     """Rewrite one original segment. Falls back to a hard trim if the model won't comply."""
     lang = languages.name(language)
-    prompt = f"Write in {lang}.\nInstruction: {instruction}\nMaximum {max_chars} characters.\nText:\n{seg['text']}"
+    keep = "\nThis is a song: keep it as short separate lines (one per line) with the same rhyme." if seg.get("type") == "song" else ""
+    prompt = f"Write in {lang}.{keep}\nInstruction: {instruction}\nMaximum {max_chars} characters.\nText:\n{seg['text']}"
 
     def check(out: RewriteOutput) -> None:
         if not out.text.strip():

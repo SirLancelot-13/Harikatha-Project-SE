@@ -1,8 +1,12 @@
 import { useState } from "react";
 import type { Segment } from "./api";
 
-const SECTION_LABEL = (s: string) =>
-  s.startsWith("nirupana") ? `Nirupana ${s.split("_")[1]}` : s.charAt(0).toUpperCase() + s.slice(1);
+const SECTION_LABEL = (s: string) => {
+  if (s.startsWith("nirupana")) return `Story part ${s.split("_")[1]}`;
+  if (s === "shloka_meaning") return "Shloka and its meaning";
+  const text = s.replace(/_/g, " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
 
 function SegmentRow({
   seg,

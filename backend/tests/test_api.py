@@ -55,7 +55,11 @@ def test_script_job_writes_stage_artifacts(tmp_path, monkeypatch):
 
     got = client.get(f"/api/v1/performances/{pid}").json()
     assert got["status"]["script_version"] == 1
-    assert len(got["script"]["segments"]) == 1 + 1 + 3 * 3 + 1  # 6 min -> 3 nirupanas
+    # invocation, opening song, intro, 2 story parts (the story has 2 events), shloka + meaning, closing verses, mangalam
+    assert [s["section"] for s in got["script"]["segments"]] == [
+        "invocation", "opening_song", "prastavana", "nirupana_1", "nirupana_2",
+        "shloka_meaning", "shloka_meaning", "closing_verses", "mangalam",
+    ]
     assert list((tmp_path / "runtime" / "llm_log").glob("*.jsonl"))
 
 
@@ -98,7 +102,8 @@ def test_edit_segment_and_guards(tmp_path, monkeypatch):
     url = f"/api/v1/performances/{pid}/segments/prastavana.1"
     r = client.patch(url, json={"text": "new text", "delivery": {"pace": 0.9}})
     assert r.status_code == 200 and r.json()["script_version"] == 2
-    assert client.get(f"/api/v1/performances/{pid}").json()["script"]["segments"][1]["text"] == "new text"
+    segs = {s["id"]: s for s in client.get(f"/api/v1/performances/{pid}").json()["script"]["segments"]}
+    assert segs["prastavana.1"]["text"] == "new text"
     assert client.patch(url.replace("prastavana.1", "nope"), json={"text": "x"}).status_code == 404
     rating = {"rater_id": "r1", "clarity": 4, "musicality": 3, "harikatha_feel": 4, "fidelity": 5}
     assert client.post(f"/api/v1/performances/{pid}/ratings", json=rating).status_code == 201

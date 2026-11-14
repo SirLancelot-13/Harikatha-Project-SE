@@ -11,7 +11,7 @@ class GenerateRequest(BaseModel):
     title: str
     story: str
     language: LanguageCode = "en-IN"
-    duration_minutes: int = Field(default=8, ge=1, le=60)
+    duration_minutes: int = Field(default=8, ge=2, le=60)  # the full structure needs at least 2 minutes
     audience: str = "general"
 
 
@@ -34,9 +34,13 @@ class Slot(BaseModel):
 
 class SectionBudget(BaseModel):
     section: str
-    kind: Literal["invocation", "prastavana", "nirupana", "mangalam"]
+    kind: Literal[
+        "invocation", "opening_song", "prastavana", "nirupana", "shloka_meaning", "closing_verses", "mangalam"
+    ]
     target_sec: float
     events: list[str] = []
+    part: int | None = None  # story parts only: which part (1-based) ...
+    parts: int | None = None  # ... of how many
     slots: list[Slot]
 
 

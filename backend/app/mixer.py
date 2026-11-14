@@ -17,7 +17,7 @@ from .config import settings
 
 PRE_ROLL = 3.0  # drone and opening bell before the first word
 POST_ROLL = 5.0  # closing bell rings out over a fading drone
-PAUSE = {"narration": 0.15, "into_song": 0.40, "out_of_song": 0.35, "section": 0.80}
+PAUSE = {"narration": 0.15, "into_song": 0.40, "out_of_song": 0.35, "section": 0.80, "after_shloka": 0.50}
 EDGE_FADE = 0.010  # per-clip fade to avoid clicks at joins
 TRIM_DB = -45  # silence threshold relative to the clip's peak
 TRIM_MARGIN = 0.02
@@ -123,7 +123,11 @@ def _pause_before(prev: dict | None, cur: dict) -> float:
     if prev is None:
         return 0.0
     if cur["section"] != prev["section"]:
+        if cur["section"].startswith("nirupana") and prev["section"].startswith("nirupana"):
+            return PAUSE["narration"]  # consecutive story parts are one continuous telling
         return PAUSE["section"]
+    if prev["type"] == "shloka" and cur["type"] == "narration":
+        return PAUSE["after_shloka"]  # let the verse land before its meaning begins
     if cur["type"] == "song":
         return PAUSE["into_song"]
     if prev["type"] == "song":
@@ -234,11 +238,9 @@ def build(script: dict, clips: dict[str, np.ndarray], rate: int,
     bell_s[-int(1.5 * rate):] *= np.linspace(1, 0, int(1.5 * rate), dtype=np.float32)
     bell_s *= voice_rms / (rms(bell_s[: 2 * rate]) or 1)
     events = [(0.4, BELL_MAIN_DB)]
-    seen = set()
-    for s, start, _ in spans:
-        if s["section"].startswith("nirupana") and s["section"] not in seen:
-            seen.add(s["section"])
-            events.append((start - PAUSE["section"] / 2, BELL_SOFT_DB))
+    first_story = next((start for s, start, _ in spans if s["section"].startswith("nirupana")), None)
+    if first_story is not None:  # one soft chime as the story begins
+        events.append((first_story - PAUSE["section"] / 2, BELL_SOFT_DB))
     events.append((spans[-1][2] + 0.5, BELL_MAIN_DB))
     for t, level in [] if "bells" in off else events:
         i = max(0, int(t * rate))
